@@ -59,3 +59,5 @@ Buka browser di: http://localhost:8501
 - **MAPE** – Mean Absolute Percentage Error (% kesalahan rata-rata)
 
 Semakin kecil nilai → semakin akurat model.
+# LSTMvsGRU
+Perbandingan kinerja saham menggunakan LSTM vs GRU
