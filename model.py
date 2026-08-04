@@ -79,7 +79,6 @@ def mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
 
 def build_lstm(input_shape):
-    """Bangun model LSTM."""
     model = Sequential([
         LSTM(50, return_sequences=True, input_shape=input_shape),
         Dropout(0.2),

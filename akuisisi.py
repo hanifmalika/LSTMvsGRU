@@ -1,7 +1,7 @@
 import yfinance as yf
 
 df = yf.download(
-    "BBRI.JK",
+    "BMRI.JK",
     start="2015-01-01",
     end="2025-12-31",
     progress=False,
@@ -9,3 +9,5 @@ df = yf.download(
 )
 
 print(df.head())
+
+
