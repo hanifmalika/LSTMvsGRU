@@ -1,23 +1,29 @@
 """
-app.py  –  Streamlit Dashboard: LSTM vs GRU Stock Prediction
+app.py  -  Streamlit Dashboard: LSTM vs GRU Stock Prediction
 Saham: BBRI, BMRI, BBTN, BBNI  |  Metrik: MAE, MSE, MAPE
+
+SUMBER DATA (dua pilihan, dipilih lewat sidebar):
+1. Dataset Yahoo Finance otomatis, rentang 2015-01-01 s/d 2025-12-31,
+   untuk BBRI/BMRI/BBTN/BBNI (tombol "Ambil Data Yahoo Finance").
+2. Input MANUAL lewat upload file Excel (satu file, boleh berisi
+   beberapa sheet - satu sheet per saham). Tersedia juga tombol download
+   TEMPLATE Excel dan link untuk melihat contoh formatnya.
+
+Kedua sumber divalidasi & dinormalisasi lewat model.py (validate_and_clean(),
+normalize_series()) sebelum dipakai untuk training LSTM/GRU.
 """
 
+import io
 import streamlit as st
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import yfinance as yf
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, GRU, Dense, Dropout
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping
 import datetime
 import warnings
 warnings.filterwarnings("ignore")
+
+import model  # <-- semua logic load-excel, validasi, normalisasi, LSTM/GRU ada di sini
 
 # ─────────────────────────────────────────────
 # PAGE CONFIG
@@ -36,431 +42,252 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap');
 
-/* =========================
-   GLOBAL
-========================= */
+html, body, [class*="css"]{ font-family: 'Inter', sans-serif; }
+.stApp{ background-color:#0d1117; color:#f0f6fc; }
 
-html, body, [class*="css"]{
-    font-family: 'Inter', sans-serif;
-}
+[data-testid="stSidebar"]{ background-color:#161b22 !important; border-right:1px solid #30363d; }
+[data-testid="stSidebar"] *{ color:#f0f6fc !important; }
+[data-testid="stSidebar"] label{ color:#58a6ff !important; font-weight:600; }
 
-.stApp{
-    background-color:#0d1117;
-    color:#f0f6fc;
-}
-
-/* =========================
-   SIDEBAR
-========================= */
-
-[data-testid="stSidebar"]{
-    background-color:#161b22 !important;
-    border-right:1px solid #30363d;
-}
-
-[data-testid="stSidebar"] *{
-    color:#f0f6fc !important;
-}
-
-[data-testid="stSidebar"] label{
-    color:#58a6ff !important;
-    font-weight:600;
-}
-
-/* =========================
-   TITLE
-========================= */
-
-.hero-title{
-    font-size:46px;
-    font-weight:800;
-    color:#58a6ff;
-    margin-bottom:6px;
-}
-
-.hero-sub{
-    color:#8b949e;
-    font-size:16px;
-}
-
-/* =========================
-   SECTION
-========================= */
+.hero-title{ font-size:46px; font-weight:800; color:#58a6ff; margin-bottom:6px; }
+.hero-sub{ color:#8b949e; font-size:16px; }
 
 .section-header{
-    background:#1f6feb;
-    color:white;
-    padding:14px 20px;
-    border-radius:10px;
-    font-size:18px;
-    font-weight:700;
-    margin:20px 0px;
+    background:#1f6feb; color:white; padding:14px 20px; border-radius:10px;
+    font-size:18px; font-weight:700; margin:20px 0px;
 }
-
-/* =========================
-   CARD
-========================= */
 
 .metric-card{
-    background:#161b22;
-    border:1px solid #30363d;
-    border-radius:14px;
-    padding:20px;
-    margin-bottom:15px;
-    box-shadow:0 3px 12px rgba(0,0,0,.25);
-    transition:.2s;
+    background:#161b22; border:1px solid #30363d; border-radius:14px;
+    padding:20px; margin-bottom:15px; box-shadow:0 3px 12px rgba(0,0,0,.25); transition:.2s;
 }
+.metric-card:hover{ border-color:#58a6ff; transform:translateY(-3px); }
+.metric-label{ color:#8b949e; font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:1px; }
+.metric-value{ font-family:'JetBrains Mono', monospace; color:#ffffff; font-size:30px; font-weight:700; margin-top:8px; }
+.metric-sub{ color:#58a6ff; font-size:13px; margin-top:6px; }
 
-.metric-card:hover{
-    border-color:#58a6ff;
-    transform:translateY(-3px);
-}
+.badge-winner{ display:inline-block; padding:5px 14px; border-radius:20px; background:#238636; color:white; font-size:12px; font-weight:700; }
+.badge-runner{ display:inline-block; padding:5px 14px; border-radius:20px; background:#1f6feb; color:white; font-size:12px; font-weight:700; }
 
-.metric-label{
-    color:#8b949e;
-    font-size:12px;
-    font-weight:600;
-    text-transform:uppercase;
-    letter-spacing:1px;
-}
+.future-table{ width:100%; border-collapse:collapse; }
+.future-table th{ background:#1f6feb; color:white; padding:12px; font-weight:600; }
+.future-table td{ background:#161b22; color:#f0f6fc; padding:10px; border-bottom:1px solid #30363d; }
+.future-table tr:hover td{ background:#21262d; }
 
-.metric-value{
-    font-family:'JetBrains Mono', monospace;
-    color:#ffffff;
-    font-size:30px;
-    font-weight:700;
-    margin-top:8px;
-}
+.stButton>button{ width:100%; background:#1f6feb; color:white; border:none; border-radius:10px; padding:10px; font-weight:600; }
+.stButton>button:hover{ background:#388bfd; }
+.stDownloadButton > button { background: #1f6feb; color: white; border: none; border-radius: 10px; padding: 10px 20px; font-weight: 600; transition: 0.3s; }
+.stDownloadButton > button:hover { background: #388bfd; color: white; }
 
-.metric-sub{
-    color:#58a6ff;
-    font-size:13px;
-    margin-top:6px;
-}
+.stTextInput input, .stNumberInput input, .stSelectbox div[data-baseweb="select"],
+.stDateInput input, .stTextArea textarea{ background:#21262d !important; color:white !important; border:1px solid #30363d !important; }
+.stTextInput label, .stNumberInput label, .stSelectbox label, .stDateInput label, .stTextArea label{ color:#f0f6fc !important; }
 
-/* =========================
-   BADGE
-========================= */
+[data-testid="stDataFrame"]{ border:1px solid #30363d; border-radius:10px; }
+[data-testid="metric-container"]{ background:#161b22; border:1px solid #30363d; border-radius:12px; padding:15px; }
+[data-testid="metric-container"] *{ color:white !important; }
+.streamlit-expanderHeader{ color:white !important; }
+p, li, span{ color:#f0f6fc; }
+hr{ border-color:#30363d; }
 
-.badge-winner{
-    display:inline-block;
-    padding:5px 14px;
-    border-radius:20px;
-    background:#238636;
-    color:white;
-    font-size:12px;
-    font-weight:700;
-}
-
-.badge-runner{
-    display:inline-block;
-    padding:5px 14px;
-    border-radius:20px;
-    background:#1f6feb;
-    color:white;
-    font-size:12px;
-    font-weight:700;
-}
-
-/* =========================
-   TABLE
-========================= */
-
-.future-table{
-    width:100%;
-    border-collapse:collapse;
-}
-
-.future-table th{
-    background:#1f6feb;
-    color:white;
-    padding:12px;
-    font-weight:600;
-}
-
-.future-table td{
-    background:#161b22;
-    color:#f0f6fc;
-    padding:10px;
-    border-bottom:1px solid #30363d;
-}
-
-.future-table tr:hover td{
-    background:#21262d;
-}
-
-/* =========================
-   BUTTON
-========================= */
-
-.stButton>button{
-    width:100%;
-    background:#1f6feb;
-    color:white;
-    border:none;
-    border-radius:10px;
-    padding:10px;
-    font-weight:600;
-}
-
-.stButton>button:hover{
-    background:#388bfd;
-}
-.stDownloadButton > button {
-    background: #1f6feb;
-    color: white;
-    border: none;
-    border-radius: 10px;
-    padding: 10px 20px;
-    font-weight: 600;
-    transition: 0.3s;
-}
-
-.stDownloadButton > button:hover {
-    background: #388bfd;
-    color: white;
-}
-
-/* =========================
-   INPUT
-========================= */
-
-.stTextInput input,
-.stNumberInput input,
-.stSelectbox div[data-baseweb="select"],
-.stDateInput input,
-.stTextArea textarea{
-    background:#21262d !important;
-    color:white !important;
-    border:1px solid #30363d !important;
-}
-
-.stTextInput label,
-.stNumberInput label,
-.stSelectbox label,
-.stDateInput label,
-.stTextArea label{
-    color:#f0f6fc !important;
-}
-
-/* =========================
-   DATAFRAME
-========================= */
-
-[data-testid="stDataFrame"]{
-    border:1px solid #30363d;
-    border-radius:10px;
-}
-
-/* =========================
-   METRIC
-========================= */
-
-[data-testid="metric-container"]{
-    background:#161b22;
-    border:1px solid #30363d;
-    border-radius:12px;
-    padding:15px;
-}
-
-[data-testid="metric-container"] *{
-    color:white !important;
-}
-
-/* =========================
-   EXPANDER
-========================= */
-
-.streamlit-expanderHeader{
-    color:white !important;
-}
-
-/* =========================
-   MARKDOWN
-========================= */
-
-p, li, span{
-    color:#f0f6fc;
-}
-
-/* =========================
-   HR
-========================= */
-
-hr{
-    border-color:#30363d;
+.upload-box{
+    background:#161b22; border:1px dashed #30363d; border-radius:12px;
+    padding:16px; margin-bottom:10px;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
-# KONFIGURASI
+# META WARNA/NAMA UNTUK SAHAM YANG SUDAH DIKENAL
+# (dipakai kalau nama sheet cocok, kalau tidak akan pakai default)
 # ─────────────────────────────────────────────
-STOCKS_META = {
-    "BBRI.JK": {"name": "Bank Rakyat Indonesia", "short": "BBRI", "color": "#42a5f5"},
-    "BMRI.JK": {"name": "Bank Mandiri",          "short": "BMRI", "color": "#66bb6a"},
-    "BBTN.JK": {"name": "Bank Tabungan Negara",  "short": "BBTN", "color": "#ffa726"},
-    "BBNI.JK": {"name": "Bank Negara Indonesia", "short": "BBNI", "color": "#ef5350"},
+KNOWN_STOCKS_META = {
+    "BBRI": {"name": "Bank Rakyat Indonesia", "color": "#42a5f5"},
+    "BMRI": {"name": "Bank Mandiri",          "color": "#66bb6a"},
+    "BBTN": {"name": "Bank Tabungan Negara",  "color": "#ffa726"},
+    "BBNI": {"name": "Bank Negara Indonesia", "color": "#ef5350"},
 }
+DEFAULT_COLORS = ["#42a5f5", "#66bb6a", "#ffa726", "#ef5350", "#ab47bc", "#26c6da"]
+
 TIMESTEPS   = 30
-TEST_SIZE   = 0.2
 EPOCHS      = 50
-BATCH_SIZE  = 32
 FUTURE_DAYS = 3
-LR          = 0.0001
+
+
+def build_meta(sheet_names):
+    """Bangun metadata (nama tampilan + warna) untuk tiap sheet yang diupload."""
+    meta = {}
+    for i, name in enumerate(sheet_names):
+        key = name.strip().upper()
+        if key in KNOWN_STOCKS_META:
+            meta[name] = {"short": key, **KNOWN_STOCKS_META[key]}
+        else:
+            meta[name] = {
+                "short": name,
+                "name": name,
+                "color": DEFAULT_COLORS[i % len(DEFAULT_COLORS)]
+            }
+    return meta
+
+
+def make_template_excel() -> bytes:
+    """Buat file Excel template (contoh format) untuk diunduh user."""
+    dates = pd.date_range("2024-01-01", periods=15, freq="B")
+    rng = np.random.default_rng(42)
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        for i, sheet in enumerate(["BBRI", "BMRI", "BBTN", "BBNI"]):
+            base = 3000 + i * 1500
+            harga = base + np.cumsum(rng.normal(0, 20, size=len(dates)))
+            df_tmpl = pd.DataFrame({
+                "Tanggal": dates.strftime("%Y-%m-%d"),
+                "Close": harga.round(0)
+            })
+            df_tmpl.to_excel(writer, sheet_name=sheet, index=False)
+    buffer.seek(0)
+    return buffer.getvalue()
 
 
 # ─────────────────────────────────────────────
-# ML FUNCTIONS
-# ─────────────────────────────────────────────
-
-def mape_score(y_true, y_pred):
-    y_true, y_pred = y_true.flatten(), y_pred.flatten()
-    mask = y_true != 0
-    return np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
-
-
-def create_sequences(X, y, ts):
-    xs, ys = [], []
-    for i in range(len(X) - ts):
-        xs.append(X[i:i+ts])
-        ys.append(y[i+ts])
-    return np.array(xs), np.array(ys)
-
-
-def build_model(model_type, input_shape):
-    layer = LSTM if model_type == "LSTM" else GRU
-    m = Sequential([
-        layer(50, return_sequences=True, input_shape=input_shape),
-        Dropout(0.2),
-        layer(50),
-        Dropout(0.2),
-        Dense(1)
-    ])
-    m.compile(optimizer=Adam(learning_rate=LR, clipnorm=1.0), loss="mse", metrics=["mae"])
-    return m
-
-
-@st.cache_data(show_spinner=False)
-def load_stock_data(ticker, start="2015-01-01", end="2025-12-31"):
-    df = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
-
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [col[0] for col in df.columns]
-
-    if "Adj Close" in df.columns:
-        df = df[["Adj Close"]].copy()
-    elif "Close" in df.columns:
-        df = df[["Close"]].copy()
-    else:
-        raise ValueError(f"Kolom harga tidak ditemukan. Tersedia: {df.columns.tolist()}")
-
-    df.columns = ["ha"]
-    df = df.dropna()
-    return df
-
-
-def train_stock(ticker, timesteps, epochs, future_days, progress_cb=None):
-    df = load_stock_data(ticker)
-    values = df["ha"].values.reshape(-1, 1)
-
-    scaler = MinMaxScaler()
-    scaled = scaler.fit_transform(values)
-
-    split = int(len(scaled) * (1 - TEST_SIZE))
-    X_tr, X_te = scaled[:split], scaled[split:]
-    y_tr, y_te = scaled[:split], scaled[split:]
-
-    X_tr_s, y_tr_s = create_sequences(X_tr, y_tr, timesteps)
-    X_te_s, y_te_s = create_sequences(X_te, y_te, timesteps)
-
-    es = EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)
-    results = {}
-
-    for mtype in ["LSTM", "GRU"]:
-        if progress_cb:
-            progress_cb(mtype)
-        model = build_model(mtype, (timesteps, 1))
-        hist = model.fit(
-            X_tr_s, y_tr_s,
-            validation_split=0.1,
-            epochs=epochs,
-            batch_size=BATCH_SIZE,
-            callbacks=[es],
-            verbose=0
-        )
-        pred_sc = model.predict(X_te_s, verbose=0)
-        pred    = scaler.inverse_transform(pred_sc)
-        actual  = scaler.inverse_transform(y_te_s)
-
-        # Future prediction
-        cur = scaled[-timesteps:].reshape(1, timesteps, 1)
-        fp  = []
-        for _ in range(future_days):
-            nxt = model.predict(cur, verbose=0)
-            fp.append(nxt[0, 0])
-            cur = np.append(cur[:, 1:, :], nxt.reshape(1, 1, 1), axis=1)
-        fp_actual = scaler.inverse_transform(np.array(fp).reshape(-1, 1)).flatten()
-
-        results[mtype] = {
-            "predictions" : pred.flatten(),
-            "actuals"     : actual.flatten(),
-            "mae"         : mean_absolute_error(actual, pred),
-            "mse"         : mean_squared_error(actual, pred),
-            "mape"        : mape_score(actual, pred),
-            "future"      : fp_actual,
-            "train_loss"  : hist.history["loss"],
-            "val_loss"    : hist.history.get("val_loss", []),
-            "test_dates"  : df.index[split + timesteps : split + timesteps + len(pred)],
-            "all_dates"   : df.index,
-            "all_prices"  : values.flatten(),
-        }
-
-    return results
-
-
-# ─────────────────────────────────────────────
-# SIDEBAR
+# SIDEBAR: SUMBER DATA (Yahoo Finance otomatis ATAU Excel manual)
 # ─────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## ⚙️ Pengaturan")
+    st.markdown("## 📥 Sumber Data")
     st.markdown("---")
 
-    selected_stocks = st.multiselect(
-        "Pilih Saham Bank",
-        options=list(STOCKS_META.keys()),
-        default=list(STOCKS_META.keys()),
-        format_func=lambda x: f"{STOCKS_META[x]['short']} – {STOCKS_META[x]['name']}"
+    data_source = st.radio(
+        "Pilih sumber data",
+        options=["📊 Dataset Yahoo Finance (2015-2025)", "📁 Upload Excel Manual"],
+        key="data_source_choice"
     )
 
-    st.markdown("---")
-    st.markdown("### 🔧 Parameter Model")
-    epochs_ui    = st.slider("Epochs",        10, 100, EPOCHS,      5)
-    timesteps_ui = st.slider("Timesteps",     10, 60,  TIMESTEPS,   5)
-    future_ui    = st.slider("Hari Prediksi",  1,  7,  FUTURE_DAYS)
+    # ── OPSI 1: DATASET YAHOO FINANCE (otomatis, 2015-2025) ──
+    if data_source.startswith("📊"):
+        st.caption(
+            f"Data historis otomatis untuk **{', '.join(t.replace('.JK','') for t in model.STOCKS)}** "
+            f"dari **{model.START_DATE}** s/d **{model.END_DATE}** via Yahoo Finance."
+        )
+
+        yahoo_btn = st.button("🚀 Ambil Data Yahoo Finance", use_container_width=True)
+
+        if yahoo_btn:
+            with st.spinner("Mengambil data dari Yahoo Finance..."):
+                try:
+                    stock_data, load_errors = model.load_yahoo_multistock(
+                        model.STOCKS, model.START_DATE, model.END_DATE
+                    )
+                    st.session_state["stock_data"] = stock_data
+                    st.session_state["stocks_meta"] = build_meta(list(stock_data.keys()))
+                    st.session_state["data_source_label"] = "Yahoo Finance (2015-2025)"
+
+                    if load_errors:
+                        st.warning(
+                            "⚠️ Sebagian saham gagal diambil:\n\n" +
+                            "\n".join([f"- {k}: {v}" for k, v in load_errors.items()])
+                        )
+                    st.success(f"✅ {len(stock_data)} saham berhasil diambil dari Yahoo Finance.")
+                except ValueError as e:
+                    st.error(
+                        f"❌ Gagal mengambil data dari Yahoo Finance:\n\n{e}\n\n"
+                        f"Silakan coba mode **📁 Upload Excel Manual** sebagai alternatif."
+                    )
+                except Exception as e:
+                    st.error(
+                        f"❌ Terjadi kesalahan saat mengambil data: {e}\n\n"
+                        f"Silakan coba mode **📁 Upload Excel Manual** sebagai alternatif."
+                    )
+
+    # ── OPSI 2: UPLOAD EXCEL MANUAL ──
+    else:
+        st.download_button(
+            label="⬇️ Download Template Excel",
+            data=make_template_excel(),
+            file_name="template_data_saham.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+
+        with st.expander("🔗 Lihat contoh format Excel"):
+            st.caption(
+                "Setiap SHEET = 1 saham (nama sheet bebas, misal BBRI/BMRI/BBTN/BBNI). "
+                "Kolom wajib: **Tanggal** dan **Close** (atau 'Adj Close' / 'Harga')."
+            )
+            contoh_df = pd.DataFrame({
+                "Tanggal": pd.date_range("2024-01-01", periods=5, freq="B").strftime("%Y-%m-%d"),
+                "Close": [4520, 4535, 4510, 4560, 4575],
+            })
+            st.dataframe(contoh_df, use_container_width=True, hide_index=True)
+            st.caption("Contoh di atas untuk 1 sheet (misal sheet bernama 'BBRI'). Ulangi pola yang sama di sheet lain.")
+
+        uploaded_file = st.file_uploader(
+            "Upload File Excel (.xlsx)",
+            type=["xlsx"],
+            help="Satu file, boleh berisi beberapa sheet (satu sheet per saham)."
+        )
+
+        if uploaded_file is not None:
+            try:
+                stock_data = model.load_excel_multisheet(uploaded_file)
+                st.session_state["stock_data"] = stock_data
+                st.session_state["stocks_meta"] = build_meta(list(stock_data.keys()))
+                st.session_state["data_source_label"] = "Upload Excel Manual"
+                st.success(f"✅ {len(stock_data)} sheet berhasil dimuat & divalidasi.")
+            except ValueError as e:
+                st.error(f"❌ Gagal memproses file:\n\n{e}")
 
     st.markdown("---")
-    run_btn = st.button("🚀 Jalankan Model", use_container_width=True)
+
+    if "stock_data" in st.session_state:
+        all_sheet_names = list(st.session_state["stock_data"].keys())
+        stocks_meta = st.session_state["stocks_meta"]
+
+        selected_stocks = st.multiselect(
+            "Pilih Saham",
+            options=all_sheet_names,
+            default=all_sheet_names,
+            format_func=lambda x: f"{stocks_meta[x]['short']} - {stocks_meta[x]['name']}"
+        )
+
+        st.markdown("---")
+        st.markdown("### 🔧 Parameter Model")
+        epochs_ui    = st.slider("Epochs",        10, 100, EPOCHS,      5)
+        timesteps_ui = st.slider("Timesteps",     10, 60,  TIMESTEPS,   5)
+        future_ui    = st.slider("Hari Prediksi",  1,  7,  FUTURE_DAYS)
+
+        st.markdown("---")
+        run_btn = st.button("🚀 Jalankan Model", use_container_width=True)
+    else:
+        selected_stocks = []
+        run_btn = False
+        epochs_ui, timesteps_ui, future_ui = EPOCHS, TIMESTEPS, FUTURE_DAYS
 
     st.markdown("---")
-    st.caption(" Data: Yahoo Finance | Model: TensorFlow/Keras")
-    st.caption("Saham perbankan Indonesia 2015–2025")
+    st.caption(f"Data: {st.session_state.get('data_source_label', 'Belum dipilih')} | Model: TensorFlow/Keras")
 
 
 # ─────────────────────────────────────────────
 # MAIN CONTENT
 # ─────────────────────────────────────────────
 st.markdown('<div class="hero-title">StockSight</div>', unsafe_allow_html=True)
-st.markdown('<div class="hero-sub"> Prediksi Harga Saham Bank Indonesia · LSTM vs GRU · Evaluasi MAE · MSE · MAPE</div>', unsafe_allow_html=True)
+st.markdown('<div class="hero-sub">Prediksi Harga Saham Bank Indonesia | LSTM vs GRU | Evaluasi MAE, MSE, MAPE</div>', unsafe_allow_html=True)
 st.markdown("---")
+
+if "stock_data" not in st.session_state:
+    st.info(
+        "👋 Mulai dengan memilih **sumber data** di sidebar:\n\n"
+        "- Klik **🚀 Ambil Data Yahoo Finance** untuk memakai dataset otomatis 2015-2025, atau\n"
+        "- Pilih **📁 Upload Excel Manual** untuk memasukkan data sendiri "
+        "(download **Template Excel** atau lihat **contoh formatnya** dulu di sidebar)."
+    )
+    st.stop()
 
 if not selected_stocks:
     st.warning("⚠️ Pilih minimal satu saham di sidebar.")
     st.stop()
 
-# ─────────────────────────────────────────────
-# TAB NAVIGATION
-# ─────────────────────────────────────────────
+stocks_meta = st.session_state["stocks_meta"]
+stock_data  = st.session_state["stock_data"]
+
 tab_overview, tab_model, tab_forecast, tab_compare = st.tabs([
     " Overview Harga",
     " Hasil Model",
@@ -472,13 +299,12 @@ tab_overview, tab_model, tab_forecast, tab_compare = st.tabs([
 # TAB 1: OVERVIEW
 # ══════════════════════════════════════════════
 with tab_overview:
-    st.markdown('<div class="section-header">📈 Histori Harga Penutupan Disesuaikan</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">📈 Histori Harga</div>', unsafe_allow_html=True)
 
     fig = go.Figure()
     for ticker in selected_stocks:
-        meta = STOCKS_META[ticker]
-        with st.spinner(f"Memuat {meta['short']}..."):
-            df = load_stock_data(ticker)
+        meta = stocks_meta[ticker]
+        df = stock_data[ticker]
         fig.add_trace(go.Scatter(
             x=df.index, y=df["ha"],
             name=meta["short"], line=dict(color=meta["color"], width=2),
@@ -501,8 +327,8 @@ with tab_overview:
     st.markdown('<div class="section-header">📋 Statistik Deskriptif</div>', unsafe_allow_html=True)
     cols = st.columns(len(selected_stocks))
     for i, ticker in enumerate(selected_stocks):
-        meta = STOCKS_META[ticker]
-        df   = load_stock_data(ticker)
+        meta = stocks_meta[ticker]
+        df   = stock_data[ticker]
         with cols[i]:
             latest = df["ha"].iloc[-1]
             oldest = df["ha"].iloc[0]
@@ -513,11 +339,16 @@ with tab_overview:
               <div class="metric-value">Rp{latest:,.0f}</div>
               <div class="metric-sub">
                 {meta['name']}<br>
+                Jumlah data: {len(df)} baris<br>
                 Min: Rp{df['ha'].min():,.0f} | Max: Rp{df['ha'].max():,.0f}<br>
                 Return: {"+" if pct>=0 else ""}{pct:.1f}%
               </div>
             </div>
             """, unsafe_allow_html=True)
+
+    with st.expander("🔍 Lihat data mentah (setelah validasi & pembersihan)"):
+        preview_ticker = st.selectbox("Pilih saham untuk preview", selected_stocks, key="preview_sel")
+        st.dataframe(stock_data[preview_ticker], use_container_width=True)
 
 
 # ══════════════════════════════════════════════
@@ -532,7 +363,7 @@ if run_btn or ("model_results" in st.session_state):
         step         = [0]
 
         for ticker in selected_stocks:
-            meta = STOCKS_META[ticker]
+            meta = stocks_meta[ticker]
 
             def update_progress(mtype, _meta=meta):
                 step[0] += 1
@@ -541,8 +372,9 @@ if run_btn or ("model_results" in st.session_state):
                     text=f"⚙️ Melatih {mtype} untuk {_meta['short']}... ({step[0]}/{total})"
                 )
 
-            all_results[ticker] = train_stock(
-                ticker,
+            all_results[ticker] = model.train_and_evaluate(
+                stock_data[ticker],
+                label=ticker,
                 timesteps=timesteps_ui,
                 epochs=epochs_ui,
                 future_days=future_ui,
@@ -566,10 +398,10 @@ if run_btn or ("model_results" in st.session_state):
         for ticker in selected_stocks:
             if ticker not in all_results:
                 continue
-            meta = STOCKS_META[ticker]
+            meta = stocks_meta[ticker]
             res  = all_results[ticker]
 
-            st.markdown(f'<div class="section-header">🏦 {meta["short"]} – {meta["name"]}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="section-header">🏦 {meta["short"]} - {meta["name"]}</div>', unsafe_allow_html=True)
 
             c1, c2, c3, c4, c5, c6 = st.columns(6)
             metrics_data = [
@@ -589,7 +421,6 @@ if run_btn or ("model_results" in st.session_state):
                       <div class="metric-sub">{sub}</div>
                     </div>""", unsafe_allow_html=True)
 
-            # Plot Prediksi vs Aktual
             fig2 = make_subplots(rows=1, cols=2,
                 subplot_titles=["LSTM: Prediksi vs Aktual", "GRU: Prediksi vs Aktual"])
 
@@ -616,7 +447,6 @@ if run_btn or ("model_results" in st.session_state):
             )
             st.plotly_chart(fig2, use_container_width=True)
 
-            # Training Loss
             fig3 = make_subplots(rows=1, cols=2,
                 subplot_titles=["LSTM Training Loss", "GRU Training Loss"])
             for col_i, mtype in enumerate(["LSTM", "GRU"], 1):
@@ -655,12 +485,12 @@ if run_btn or ("model_results" in st.session_state):
         for ticker in selected_stocks:
             if ticker not in all_results:
                 continue
-            meta       = STOCKS_META[ticker]
+            meta       = stocks_meta[ticker]
             res        = all_results[ticker]
-            df         = load_stock_data(ticker)
+            df         = stock_data[ticker]
             last_price = float(df["ha"].iloc[-1])
 
-            st.markdown(f"#### 🏦 {meta['short']} – {meta['name']}")
+            st.markdown(f"#### 🏦 {meta['short']} - {meta['name']}")
 
             fig4      = go.Figure()
             hist_tail = df.tail(30)
@@ -687,9 +517,7 @@ if run_btn or ("model_results" in st.session_state):
                 ))
 
             fig4.add_shape(
-                type="line",
-                x0=today_str, x1=today_str,
-                y0=0, y1=1,
+                type="line", x0=today_str, x1=today_str, y0=0, y1=1,
                 xref="x", yref="paper",
                 line=dict(color="#ffa726", dash="dot", width=2)
             )
@@ -709,7 +537,6 @@ if run_btn or ("model_results" in st.session_state):
             )
             st.plotly_chart(fig4, use_container_width=True)
 
-            # Tabel prediksi
             rows = ""
             for i, date_str in enumerate(future_dates):
                 lstm_p     = res["LSTM"]["future"][i]
@@ -751,7 +578,7 @@ if run_btn or ("model_results" in st.session_state):
         for ticker in selected_stocks:
             if ticker not in all_results:
                 continue
-            meta = STOCKS_META[ticker]
+            meta = stocks_meta[ticker]
             res  = all_results[ticker]
             for mtype in ["LSTM", "GRU"]:
                 rows_data.append({
@@ -767,7 +594,6 @@ if run_btn or ("model_results" in st.session_state):
         if df_cmp.empty or "Model" not in df_cmp.columns:
             st.warning("Tidak ada data. Jalankan model terlebih dahulu.")
         else:
-            # Bar chart
             fig_bar = make_subplots(rows=1, cols=3,
                 subplot_titles=[
                     "MAE (lebih kecil = lebih baik)",
@@ -798,15 +624,15 @@ if run_btn or ("model_results" in st.session_state):
                 margin=dict(l=0, r=0, t=50, b=0)
             )
             st.plotly_chart(fig_bar, use_container_width=True)
-            # Download Data perbandingan LSTM_Prediksi dan GRU Prediksi
+
             all_export = []
             for ticker in selected_stocks:
                 if ticker not in all_results:
                     continue
-                meta = STOCKS_META[ticker]
+                meta = stocks_meta[ticker]
                 res  = all_results[ticker]
                 dates = res["LSTM"]["test_dates"][:len(res["LSTM"]["actuals"])]
-                
+
                 for j, d in enumerate(dates):
                     all_export.append({
                         "Saham"         : meta["short"],
@@ -825,12 +651,12 @@ if run_btn or ("model_results" in st.session_state):
                 mime="text/csv",
                 use_container_width=True
             )
-            # Radar chart
+
             st.markdown('<div class="section-header">🕸 Radar Chart Perbandingan</div>', unsafe_allow_html=True)
             for ticker in selected_stocks:
                 if ticker not in all_results:
                     continue
-                meta = STOCKS_META[ticker]
+                meta = stocks_meta[ticker]
                 res  = all_results[ticker]
 
                 categories   = ["MAE", "MSE", "MAPE"]
@@ -857,7 +683,7 @@ if run_btn or ("model_results" in st.session_state):
                     ),
                     paper_bgcolor="rgba(0,0,0,0)",
                     font=dict(color="#e2e8f0"),
-                    title=dict(text=f"{meta['short']} – {meta['name']}", font=dict(size=15)),
+                    title=dict(text=f"{meta['short']} - {meta['name']}", font=dict(size=15)),
                     showlegend=True,
                     legend=dict(bgcolor="rgba(13,21,38,0.8)"),
                     height=380,
@@ -865,7 +691,6 @@ if run_btn or ("model_results" in st.session_state):
                 )
                 st.plotly_chart(fig_radar, use_container_width=True)
 
-            # Winner Summary
             st.markdown('<div class="section-header">🏆 Kesimpulan: Model Terbaik per Saham</div>', unsafe_allow_html=True)
             win_cols     = st.columns(len(selected_stocks))
             overall_wins = {"LSTM": 0, "GRU": 0}
@@ -873,7 +698,7 @@ if run_btn or ("model_results" in st.session_state):
             for i, ticker in enumerate(selected_stocks):
                 if ticker not in all_results:
                     continue
-                meta = STOCKS_META[ticker]
+                meta = stocks_meta[ticker]
                 res  = all_results[ticker]
 
                 lstm_score = res["LSTM"]["mae"] + res["LSTM"]["mape"]
@@ -896,7 +721,6 @@ if run_btn or ("model_results" in st.session_state):
                     </div>
                     """, unsafe_allow_html=True)
 
-            # Overall winner
             st.markdown("---")
             overall_winner = max(overall_wins, key=overall_wins.get)
             other          = "GRU" if overall_winner == "LSTM" else "LSTM"
